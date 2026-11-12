@@ -30,3 +30,11 @@ PLIST
 
 codesign --force --sign - "$app_dir"
 echo "Built $app_dir"
+
+# --install copies it to ~/Applications, a stable home for the "Open at login" setting.
+if [[ "${1:-}" == --install ]]; then
+  mkdir -p ~/Applications
+  rm -rf ~/Applications/PRWatch.app
+  cp -R "$app_dir" ~/Applications/PRWatch.app
+  echo "Installed ~/Applications/PRWatch.app"
+fi

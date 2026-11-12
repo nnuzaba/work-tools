@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import SwiftUI
 
 @main
@@ -20,6 +21,7 @@ struct PRWatchApp: App {
 private func badgeCount(for state: BarState) -> Int? {
     switch state {
     case .ciFailed(let count), .newActivity(let count): return count
+    case .alertsPaused(let newCount): return newCount > 0 ? newCount : nil
     default: return nil
     }
 }
@@ -31,6 +33,7 @@ private func menuBarImage(for state: BarState) -> NSImage {
     case .offline: ("icloud.slash", nil)
     case .ciFailed: ("xmark.circle", .systemRed)
     case .ciRunning: ("arrow.triangle.2.circlepath", .systemOrange)
+    case .alertsPaused: ("bell.slash", nil)
     case .newActivity: ("arrow.triangle.pull", .systemBlue)
     case .allClear: ("arrow.triangle.pull", nil)
     }
@@ -77,7 +80,7 @@ struct MenuContent: View {
             Section("Recent") {
                 ForEach(store.snapshot.notifications.prefix(5)) { item in
                     linkButton(item.subject.title, detail: "\(item.repository.fullName) · \(item.reason)",
-                               icon: "bell", url: item.webURL)
+                               icon: store.isNew(item) ? "bell.badge" : "bell", url: item.webURL)
                 }
             }
         }
@@ -85,9 +88,16 @@ struct MenuContent: View {
         Divider()
         Button(store.refreshInFlight ? "Refreshing…" : "Refresh now") { store.refresh() }
             .keyboardShortcut("r")
+        Button(store.alertsPaused ? "Resume alerts" : "Pause alerts for 1 hour") { store.toggleAlertPause() }
         Button("Open GitHub notifications") {
             NSWorkspace.shared.open(URL(string: "https://github.com/notifications")!)
         }
+        Toggle("Open at login", isOn: Binding(
+            get: { SMAppService.mainApp.status == .enabled },
+            set: { shouldOpenAtLogin in
+                try? shouldOpenAtLogin ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
+            }
+        ))
         Divider()
         Button("Quit PR Watch") { NSApp.terminate(nil) }
             .keyboardShortcut("q")

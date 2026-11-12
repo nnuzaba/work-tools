@@ -40,14 +40,21 @@ struct GitHubNotification: Identifiable, Decodable {
         let type: String
     }
 
+    /// Changes whenever GitHub bumps the thread, so new activity on an old thread counts as new.
+    var version: String { "\(id)@\(Int(updatedAt.timeIntervalSince1970))" }
+
+    /// The PR number, or nil for CI notices (they don't point at a PR).
+    var prNumber: Int? { subject.url?.split(separator: "/").last.flatMap { Int($0) } }
+
+    /// "owner/repo#123", matching `PullRequest.id`.
+    var prKey: String? { prNumber.map { "\(repository.fullName)#\($0)" } }
+
     /// The API hands back api.github.com links, so rebuild the web page link.
     /// CI notices have no link at all, so they open the repo's Actions page.
     var webURL: URL {
         let repoPage = "https://github.com/\(repository.fullName)"
-        guard let apiURL = subject.url, let number = apiURL.split(separator: "/").last else {
-            return URL(string: "\(repoPage)/actions")!
-        }
-        return URL(string: "\(repoPage)/pull/\(number)")!
+        guard let prNumber else { return URL(string: "\(repoPage)/actions")! }
+        return URL(string: "\(repoPage)/pull/\(prNumber)")!
     }
 }
 
@@ -56,6 +63,8 @@ struct Snapshot {
     var myPRs: [PullRequest] = []
     var reviewRequests: [PullRequest] = []
     var notifications: [GitHubNotification] = []
+    /// Someone else's PRs you commented on or reviewed, as "owner/repo#123".
+    var commentedPRKeys: Set<String> = []
 }
 
 struct GitHubError: Error {
@@ -76,7 +85,14 @@ enum GitHub {
       review: search(query: "is:pr is:open review-requested:@me archived:false sort:updated-desc", type: ISSUE, first: 20) {
         nodes { ...prFields }
       }
+      commented: search(query: "is:pr -author:@me commenter:@me sort:updated-desc", type: ISSUE, first: 50) {
+        nodes { ...prKey }
+      }
+      reviewed: search(query: "is:pr -author:@me reviewed-by:@me sort:updated-desc", type: ISSUE, first: 50) {
+        nodes { ...prKey }
+      }
     }
+    fragment prKey on PullRequest { number repository { nameWithOwner } }
     fragment prFields on PullRequest {
       number title url isDraft reviewDecision
       repository { nameWithOwner }
@@ -107,8 +123,10 @@ enum GitHub {
     static func fetchSnapshot() throws -> Snapshot {
         struct SearchResponse: Decodable {
             let data: Results
-            struct Results: Decodable { let mine: Search; let review: Search }
+            struct Results: Decodable { let mine, review: Search; let commented, reviewed: KeySearch }
             struct Search: Decodable { let nodes: [PullRequest] }
+            struct KeySearch: Decodable { let nodes: [PRKey] }
+            struct PRKey: Decodable { let number: Int; let repository: PullRequest.Repo }
         }
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
@@ -120,6 +138,43 @@ enum GitHub {
         let notifications = try decoder.decode([GitHubNotification].self, from: notificationData)
             .filter { $0.subject.type == "PullRequest" || $0.subject.type == "CheckSuite" }
 
-        return Snapshot(myPRs: search.mine.nodes, reviewRequests: search.review.nodes, notifications: notifications)
+        let commentedPRKeys = Set((search.commented.nodes + search.reviewed.nodes)
+            .map { "\($0.repository.nameWithOwner)#\($0.number)" })
+        return Snapshot(myPRs: search.mine.nodes, reviewRequests: search.review.nodes,
+                        notifications: notifications, commentedPRKeys: commentedPRKeys)
+    }
+
+    private static let lastActorQuery = """
+    query($owner: String!, $name: String!, $number: Int!) {
+      viewer { login }
+      repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+        timelineItems(last: 1, itemTypes: [ISSUE_COMMENT, PULL_REQUEST_REVIEW, PULL_REQUEST_COMMIT,
+            MERGED_EVENT, CLOSED_EVENT, REOPENED_EVENT, REVIEW_REQUESTED_EVENT,
+            READY_FOR_REVIEW_EVENT, HEAD_REF_FORCE_PUSHED_EVENT]) {
+          nodes {
+            ... on IssueComment { author { login } }
+            ... on PullRequestReview { author { login } }
+            ... on PullRequestCommit { commit { author { user { login } } } }
+            ... on MergedEvent { actor { login } }
+            ... on ClosedEvent { actor { login } }
+            ... on ReopenedEvent { actor { login } }
+            ... on ReviewRequestedEvent { actor { login } }
+            ... on ReadyForReviewEvent { actor { login } }
+            ... on HeadRefForcePushedEvent { actor { login } }
+          } } } } }
+    """
+
+    /// True if you did the latest thing on the PR (comment, review, push, merge, ...),
+    /// so there's nothing to alert you about. Treats errors as "no".
+    static func viewerActedLast(repo: String, number: Int) -> Bool {
+        let parts = repo.split(separator: "/", maxSplits: 1)
+        guard parts.count == 2 else { return false }
+        let jq = """
+        .data.viewer.login == (.data.repository.pullRequest.timelineItems.nodes[0]
+          | .author.login // .actor.login // .commit.author.user.login)
+        """
+        let answer = try? run(["api", "graphql", "-f", "owner=\(parts[0])", "-f", "name=\(parts[1])",
+                               "-F", "number=\(number)", "-f", "query=\(lastActorQuery)", "--jq", jq])
+        return answer.map { String(decoding: $0, as: UTF8.self).hasPrefix("true") } ?? false
     }
 }
