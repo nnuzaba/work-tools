@@ -7,7 +7,7 @@ struct PanelRowItem: Identifiable {
     let id: String
     let title: String
     let detail: String
-    let icon: String
+    let octicon: Octicon
     let tint: Color
     let url: URL
 }
@@ -60,7 +60,7 @@ struct MenuPanel: View {
                 .padding(.top, 8)
                 .padding(.bottom, 2)
             ForEach(rows.prefix(visibleCount)) { row in
-                PanelRow(panelState: panelState, icon: row.icon, tint: row.tint, title: row.title, detail: row.detail) {
+                PanelRow(panelState: panelState, octicon: row.octicon, tint: row.tint, title: row.title, detail: row.detail) {
                     NSWorkspace.shared.open(row.url)
                 }
             }
@@ -100,14 +100,14 @@ struct MenuPanel: View {
         store.snapshot.reviewRequests
             .filter { store.snapshot.commentedPRKeys.contains($0.id) }
             .map { PanelRowItem(id: $0.id, title: $0.title, detail: "\(shortName($0.id)) · review requested",
-                                icon: "eye", tint: .blue, url: $0.url) }
+                                octicon: .reviewRequested, tint: GitHubColor.accent, url: $0.url) }
     }
 
     private var yourPRRows: [PanelRowItem] {
         store.snapshot.myPRs.sorted { urgencyRank($0) < urgencyRank($1) }.map { pr in
-            let (icon, tint, detail) = statusSummary(for: pr)
+            let (octicon, tint, detail) = statusSummary(for: pr)
             return PanelRowItem(id: pr.id, title: pr.title, detail: "\(shortName(pr.id)) · \(detail)",
-                                icon: icon, tint: tint, url: pr.url)
+                                octicon: octicon, tint: tint, url: pr.url)
         }
     }
 
@@ -125,14 +125,14 @@ struct MenuPanel: View {
         return pr.isDraft ? 5 : 4
     }
 
-    private func statusSummary(for pr: PullRequest) -> (icon: String, tint: Color, detail: String) {
-        if pr.ciFailed { return ("xmark.circle", .red, "CI failed") }
-        if pr.ciRunning { return ("clock", .orange, "CI running") }
-        if pr.isDraft { return ("pencil.circle", .secondary, "draft") }
+    private func statusSummary(for pr: PullRequest) -> (octicon: Octicon, tint: Color, detail: String) {
+        if pr.ciFailed { return (.failed, GitHubColor.failed, "CI failed") }
+        if pr.ciRunning { return (.running, GitHubColor.pending, "CI running") }
+        if pr.isDraft { return (.draftPullRequest, GitHubColor.neutral, "draft") }
         switch pr.reviewDecision {
-        case "APPROVED": return ("checkmark.circle", .green, "approved")
-        case "CHANGES_REQUESTED": return ("text.bubble", .orange, "changes requested")
-        default: return ("circle.dashed", .secondary, "waiting on review")
+        case "APPROVED": return (.approved, GitHubColor.open, "approved")
+        case "CHANGES_REQUESTED": return (.changesRequested, GitHubColor.failed, "changes requested")
+        default: return (.pullRequest, GitHubColor.open, "waiting on review")
         }
     }
 }
@@ -140,7 +140,9 @@ struct MenuPanel: View {
 /// A full-width button row that highlights on hover, like a menu item.
 struct PanelRow: View {
     @ObservedObject var panelState: PanelState
-    let icon: String
+    /// An SF Symbol name, used when there's no Octicon (the footer actions).
+    var icon: String = "circle"
+    var octicon: Octicon? = nil
     var tint: Color = .primary
     let title: String
     var detail: String? = nil
@@ -153,10 +155,15 @@ struct PanelRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: icon)
-                    .font(.system(size: 14))
-                    .foregroundStyle(tint)
-                    .frame(width: 18)
+                Group {
+                    if let octicon {
+                        octicon.image.resizable().frame(width: 16, height: 16)
+                    } else {
+                        Image(systemName: icon).font(.system(size: 14))
+                    }
+                }
+                .foregroundStyle(tint)
+                .frame(width: 18)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title).font(.system(size: 13)).lineLimit(1).truncationMode(.tail)
                     if let detail {

@@ -11,6 +11,8 @@ app_dir="build/PRWatch.app"
 rm -rf "$app_dir"
 mkdir -p "$app_dir/Contents/MacOS"
 cp .build/release/PRWatch "$app_dir/Contents/MacOS/PRWatch"
+mkdir -p "$app_dir/Contents/Resources"
+cp -R Resources/octicons "$app_dir/Contents/Resources/octicons"
 
 cat > "$app_dir/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
