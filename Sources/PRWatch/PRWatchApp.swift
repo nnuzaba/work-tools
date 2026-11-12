@@ -55,21 +55,19 @@ struct MenuContent: View {
         }
         Divider()
 
-        if !store.failingPRs.isEmpty || !store.snapshot.reviewRequests.isEmpty {
+        let reviewRequestsOnCommentedPRs = store.snapshot.reviewRequests
+            .filter { store.snapshot.commentedPRKeys.contains($0.id) }
+        if !reviewRequestsOnCommentedPRs.isEmpty {
             Section("Needs you") {
-                ForEach(store.failingPRs) { pr in
-                    linkButton(pr.title, detail: "\(pr.id) · CI failed", icon: "xmark.circle", url: pr.url)
-                }
-                ForEach(store.snapshot.reviewRequests) { pr in
+                ForEach(reviewRequestsOnCommentedPRs) { pr in
                     linkButton(pr.title, detail: "\(pr.id) · review requested", icon: "eye", url: pr.url)
                 }
             }
         }
 
-        let otherPRs = store.snapshot.myPRs.filter { !$0.ciFailed }
-        if !otherPRs.isEmpty {
+        if !store.snapshot.myPRs.isEmpty {
             Section("Your PRs") {
-                ForEach(otherPRs) { pr in
+                ForEach(store.snapshot.myPRs) { pr in
                     let (icon, detail) = statusSummary(for: pr)
                     linkButton(pr.title, detail: "\(pr.id) · \(detail)", icon: icon, url: pr.url)
                 }
@@ -111,6 +109,7 @@ struct MenuContent: View {
     }
 
     private func statusSummary(for pr: PullRequest) -> (icon: String, detail: String) {
+        if pr.ciFailed { return ("xmark.circle", "CI failed") }
         if pr.ciRunning { return ("clock", "CI running") }
         if pr.isDraft { return ("pencil.circle", "draft") }
         switch pr.reviewDecision {
