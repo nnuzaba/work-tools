@@ -21,6 +21,8 @@ final class Store: ObservableObject {
     @Published private(set) var refreshInFlight = false
     @Published private(set) var alertsPausedUntil: Date?
     @Published private(set) var seenState = SeenState()
+    /// Re-read from ~/.config/pr-watch/config on every poll.
+    @Published private(set) var watchConfig = WatchConfig.load()
 
     private let pollIntervalSeconds: TimeInterval = 60
     private var pollTimer: Timer?
@@ -51,6 +53,14 @@ final class Store: ObservableObject {
 
     func isNew(_ item: GitHubNotification) -> Bool { !seenState.viewedVersions.contains(item.version) }
 
+    /// Notifications your config rules would alert you about. The badge counts only these,
+    /// so the icon and the Mac alerts agree on what matters.
+    var alertWorthyNotifications: [GitHubNotification] {
+        snapshot.notifications.filter {
+            Alerts.heading(for: $0, config: watchConfig, commentedPRKeys: snapshot.commentedPRKeys) != nil
+        }
+    }
+
     /// Called when the menu closes: everything you just saw stops counting as new.
     func markAllViewed() {
         guard hasSeenBaseline else { return }
@@ -78,9 +88,10 @@ final class Store: ObservableObject {
             hasSeenBaseline = true
         }
         seenState.save()
+        watchConfig = WatchConfig.load()
         guard !isBaselinePoll, !alertsPaused else { return }
 
-        let config = WatchConfig.load()
+        let config = watchConfig
         var pendingAlerts: [PendingAlert] = []
         if config.notifyOnPushesToPRsICommented {
             for pr in freshSnapshot.commentedPRs.values where config.watches(repo: pr.repository.nameWithOwner) {
@@ -132,7 +143,7 @@ final class Store: ObservableObject {
         if failedPollsInARow >= 2 || (lastCheckedAt == nil && lastErrorMessage != nil) { return .offline }
         if !failingPRs.isEmpty { return .ciFailed(count: failingPRs.count) }
         if snapshot.myPRs.contains(where: \.ciRunning) { return .ciRunning }
-        let newItemCount = snapshot.notifications.filter(isNew).count
+        let newItemCount = alertWorthyNotifications.filter(isNew).count
         if alertsPaused { return .alertsPaused(newCount: newItemCount) }
         return newItemCount > 0 ? .newActivity(count: newItemCount) : .allClear
     }

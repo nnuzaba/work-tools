@@ -28,7 +28,6 @@ struct MenuPanel: View {
             PanelDivider()
             section("Needs you", rows: needsYouRows)
             section("Your PRs", rows: yourPRRows)
-            section("Recent", rows: recentRows)
             footer
         }
         .padding(5)
@@ -109,15 +108,6 @@ struct MenuPanel: View {
             let (icon, tint, detail) = statusSummary(for: pr)
             return PanelRowItem(id: pr.id, title: pr.title, detail: "\(shortName(pr.id)) · \(detail)",
                                 icon: icon, tint: tint, url: pr.url)
-        }
-    }
-
-    private var recentRows: [PanelRowItem] {
-        store.snapshot.notifications.map { item in
-            let isNew = store.isNew(item)
-            return PanelRowItem(id: item.id, title: item.subject.title,
-                                detail: "\(shortName(item.repository.fullName)) · \(item.reason.replacingOccurrences(of: "_", with: " "))",
-                                icon: isNew ? "bell.badge" : "bell", tint: isNew ? .blue : .secondary, url: item.webURL)
         }
     }
 
