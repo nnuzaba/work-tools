@@ -63,8 +63,20 @@ struct Snapshot {
     var myPRs: [PullRequest] = []
     var reviewRequests: [PullRequest] = []
     var notifications: [GitHubNotification] = []
-    /// Someone else's PRs you commented on or reviewed, as "owner/repo#123".
-    var commentedPRKeys: Set<String> = []
+    /// Someone else's PRs you commented on or reviewed, keyed by "owner/repo#123".
+    var commentedPRs: [String: CommentedPR] = [:]
+    var commentedPRKeys: Set<String> { Set(commentedPRs.keys) }
+}
+
+/// A PR by someone else that you commented on or reviewed.
+struct CommentedPR: Decodable {
+    let number: Int
+    let title: String
+    /// The latest commit. When it changes, someone pushed.
+    let headRefOid: String
+    let repository: PullRequest.Repo
+
+    var key: String { "\(repository.nameWithOwner)#\(number)" }
 }
 
 struct GitHubError: Error {
@@ -92,7 +104,7 @@ enum GitHub {
         nodes { ...prKey }
       }
     }
-    fragment prKey on PullRequest { number repository { nameWithOwner } }
+    fragment prKey on PullRequest { number title headRefOid repository { nameWithOwner } }
     fragment prFields on PullRequest {
       number title url isDraft reviewDecision
       repository { nameWithOwner }
@@ -125,8 +137,7 @@ enum GitHub {
             let data: Results
             struct Results: Decodable { let mine, review: Search; let commented, reviewed: KeySearch }
             struct Search: Decodable { let nodes: [PullRequest] }
-            struct KeySearch: Decodable { let nodes: [PRKey] }
-            struct PRKey: Decodable { let number: Int; let repository: PullRequest.Repo }
+            struct KeySearch: Decodable { let nodes: [CommentedPR] }
         }
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
@@ -138,10 +149,10 @@ enum GitHub {
         let notifications = try decoder.decode([GitHubNotification].self, from: notificationData)
             .filter { $0.subject.type == "PullRequest" || $0.subject.type == "CheckSuite" }
 
-        let commentedPRKeys = Set((search.commented.nodes + search.reviewed.nodes)
-            .map { "\($0.repository.nameWithOwner)#\($0.number)" })
+        let commentedPRs = Dictionary((search.commented.nodes + search.reviewed.nodes).map { ($0.key, $0) },
+                                      uniquingKeysWith: { first, _ in first })
         return Snapshot(myPRs: search.mine.nodes, reviewRequests: search.review.nodes,
-                        notifications: notifications, commentedPRKeys: commentedPRKeys)
+                        notifications: notifications, commentedPRs: commentedPRs)
     }
 
     private static let lastActorQuery = """

@@ -57,30 +57,49 @@ final class Store: ObservableObject {
         seenState.save()
     }
 
-    /// Alerts about notifications that showed up since the last poll.
+    /// One Mac alert waiting to go out.
+    private struct PendingAlert {
+        let heading, message, repo: String
+        let prNumber: Int?
+        let url: URL
+    }
+
+    /// Alerts about notifications and pushes that showed up since the last poll.
     private func sendAlerts(for freshSnapshot: Snapshot) {
         let freshVersions = Set(freshSnapshot.notifications.map(\.version))
         let unalertedItems = freshSnapshot.notifications.filter { !seenState.alertedVersions.contains($0.version) }
+        let previousHeads = seenState.commentedPRHeads
         seenState.alertedVersions = freshVersions
+        seenState.commentedPRHeads = freshSnapshot.commentedPRs.mapValues(\.headRefOid)
         let isBaselinePoll = !hasSeenBaseline
         if isBaselinePoll {
             seenState.viewedVersions = freshVersions
             hasSeenBaseline = true
         }
         seenState.save()
-        guard !isBaselinePoll, !alertsPaused, !unalertedItems.isEmpty else { return }
+        guard !isBaselinePoll, !alertsPaused else { return }
 
         let config = WatchConfig.load()
-        let alertsToSend = unalertedItems.compactMap { item in
-            Alerts.heading(for: item, config: config, commentedPRKeys: freshSnapshot.commentedPRKeys)
-                .map { (item, $0) }
+        var pendingAlerts: [PendingAlert] = []
+        if config.notifyOnPushesToPRsICommented {
+            for pr in freshSnapshot.commentedPRs.values where config.watches(repo: pr.repository.nameWithOwner) {
+                guard let previousHead = previousHeads[pr.key], previousHead != pr.headRefOid else { continue }
+                let commitsPage = URL(string: "https://github.com/\(pr.repository.nameWithOwner)/pull/\(pr.number)/commits")!
+                pendingAlerts.append(PendingAlert(heading: "New commits pushed", message: pr.title,
+                                                  repo: pr.repository.nameWithOwner, prNumber: pr.number, url: commitsPage))
+            }
         }
+        for item in unalertedItems {
+            guard let heading = Alerts.heading(for: item, config: config,
+                                               commentedPRKeys: freshSnapshot.commentedPRKeys) else { continue }
+            pendingAlerts.append(PendingAlert(heading: heading, message: item.subject.title,
+                                              repo: item.repository.fullName, prNumber: item.prNumber, url: item.webURL))
+        }
+        guard !pendingAlerts.isEmpty else { return }
         Task.detached {
-            for (item, heading) in alertsToSend {
-                if let prNumber = item.prNumber,
-                   GitHub.viewerActedLast(repo: item.repository.fullName, number: prNumber) { continue }
-                Alerts.send(heading: heading, message: item.subject.title,
-                            subtitle: item.repository.fullName, url: item.webURL)
+            for alert in pendingAlerts {
+                if let prNumber = alert.prNumber, GitHub.viewerActedLast(repo: alert.repo, number: prNumber) { continue }
+                Alerts.send(heading: alert.heading, message: alert.message, subtitle: alert.repo, url: alert.url)
             }
         }
     }

@@ -6,6 +6,7 @@ struct WatchConfig {
     var notifyOnMyPRs = true
     var notifyOnCI = true
     var notifyOnPRsICommented = true
+    var notifyOnPushesToPRsICommented = true
     var notifyOnAllMentions = false
     var watchedReposPattern = "."
 
@@ -23,6 +24,7 @@ struct WatchConfig {
             case "notify_on_my_prs": config.notifyOnMyPRs = isYes
             case "notify_on_ci": config.notifyOnCI = isYes
             case "notify_on_prs_i_commented": config.notifyOnPRsICommented = isYes
+            case "notify_on_pushes_to_prs_i_commented": config.notifyOnPushesToPRsICommented = isYes
             case "notify_on_all_mentions": config.notifyOnAllMentions = isYes
             case "watched_repos_pattern": config.watchedReposPattern = parts[1]
             default: break
@@ -79,6 +81,8 @@ enum Alerts {
 struct SeenState: Codable {
     var alertedVersions: Set<String> = []
     var viewedVersions: Set<String> = []
+    /// Latest commit we saw on each PR you commented on, keyed by "owner/repo#123".
+    var commentedPRHeads: [String: String] = [:]
 
     private static let file = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".local/state/pr-watch-app/seen.json")
