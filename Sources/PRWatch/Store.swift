@@ -36,7 +36,8 @@ final class Store: ObservableObject {
         pollTimer = Timer.scheduledTimer(withTimeInterval: pollIntervalSeconds, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }
-        NotificationCenter.default.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil,
+        // The panel is this app's only window, so losing focus means it just closed.
+        NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: nil,
                                                queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.markAllViewed() }
         }

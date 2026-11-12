@@ -1,20 +1,44 @@
 import AppKit
-import ServiceManagement
 import SwiftUI
 
 @main
 struct PRWatchApp: App {
     @StateObject private var store = Store()
 
+    init() {
+        if let flagIndex = CommandLine.arguments.firstIndex(of: "--snapshot"),
+           CommandLine.arguments.indices.contains(flagIndex + 1) {
+            savePanelSnapshot(to: CommandLine.arguments[flagIndex + 1])
+        }
+    }
+
     var body: some Scene {
         MenuBarExtra {
-            MenuContent(store: store)
+            MenuPanel(store: store)
         } label: {
             Image(nsImage: menuBarImage(for: store.barState))
             if let count = badgeCount(for: store.barState) {
                 Text("\(count)")
             }
         }
+        .menuBarExtraStyle(.window)
+    }
+}
+
+/// For checking the design without clicking: `PRWatch --snapshot out.png` waits for the
+/// first poll, saves the panel as an image, and quits.
+@MainActor
+private func savePanelSnapshot(to path: String) {
+    let snapshotStore = Store()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 20) {
+        let renderer = ImageRenderer(content: MenuPanel(store: snapshotStore)
+            .background(Color(nsColor: .windowBackgroundColor)))
+        renderer.scale = 2
+        if let image = renderer.nsImage, let tiff = image.tiffRepresentation,
+           let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+            try? png.write(to: URL(fileURLWithPath: path))
+        }
+        exit(0)
     }
 }
 
@@ -43,79 +67,4 @@ private func menuBarImage(for state: BarState) -> NSImage {
         .withSymbolConfiguration(config) ?? NSImage()
     image.isTemplate = (tint == nil)
     return image
-}
-
-struct MenuContent: View {
-    @ObservedObject var store: Store
-
-    var body: some View {
-        Text(store.statusLine)
-        if let errorMessage = store.lastErrorMessage {
-            Text(String(errorMessage.prefix(80)))
-        }
-        Divider()
-
-        let reviewRequestsOnCommentedPRs = store.snapshot.reviewRequests
-            .filter { store.snapshot.commentedPRKeys.contains($0.id) }
-        if !reviewRequestsOnCommentedPRs.isEmpty {
-            Section("Needs you") {
-                ForEach(reviewRequestsOnCommentedPRs) { pr in
-                    linkButton(pr.title, detail: "\(pr.id) · review requested", icon: "eye", url: pr.url)
-                }
-            }
-        }
-
-        if !store.snapshot.myPRs.isEmpty {
-            Section("Your PRs") {
-                ForEach(store.snapshot.myPRs) { pr in
-                    let (icon, detail) = statusSummary(for: pr)
-                    linkButton(pr.title, detail: "\(pr.id) · \(detail)", icon: icon, url: pr.url)
-                }
-            }
-        }
-
-        if !store.snapshot.notifications.isEmpty {
-            Section("Recent") {
-                ForEach(store.snapshot.notifications.prefix(5)) { item in
-                    linkButton(item.subject.title, detail: "\(item.repository.fullName) · \(item.reason)",
-                               icon: store.isNew(item) ? "bell.badge" : "bell", url: item.webURL)
-                }
-            }
-        }
-
-        Divider()
-        Button(store.refreshInFlight ? "Refreshing…" : "Refresh now") { store.refresh() }
-            .keyboardShortcut("r")
-        Button(store.alertsPaused ? "Resume alerts" : "Pause alerts for 1 hour") { store.toggleAlertPause() }
-        Button("Open GitHub notifications") {
-            NSWorkspace.shared.open(URL(string: "https://github.com/notifications")!)
-        }
-        Toggle("Open at login", isOn: Binding(
-            get: { SMAppService.mainApp.status == .enabled },
-            set: { shouldOpenAtLogin in
-                try? shouldOpenAtLogin ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
-            }
-        ))
-        Divider()
-        Button("Quit PR Watch") { NSApp.terminate(nil) }
-            .keyboardShortcut("q")
-    }
-
-    private func linkButton(_ title: String, detail: String, icon: String, url: URL) -> some View {
-        let shortTitle = title.count > 48 ? title.prefix(47) + "…" : Substring(title)
-        return Button { NSWorkspace.shared.open(url) } label: {
-            Label("\(shortTitle)  —  \(detail)", systemImage: icon)
-        }
-    }
-
-    private func statusSummary(for pr: PullRequest) -> (icon: String, detail: String) {
-        if pr.ciFailed { return ("xmark.circle", "CI failed") }
-        if pr.ciRunning { return ("clock", "CI running") }
-        if pr.isDraft { return ("pencil.circle", "draft") }
-        switch pr.reviewDecision {
-        case "APPROVED": return ("checkmark.circle", "approved")
-        case "CHANGES_REQUESTED": return ("exclamationmark.bubble", "changes requested")
-        default: return ("circle", "waiting on review")
-        }
-    }
 }
