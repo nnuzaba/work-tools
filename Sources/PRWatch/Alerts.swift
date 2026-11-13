@@ -83,6 +83,9 @@ struct SeenState: Codable {
     var viewedVersions: Set<String> = []
     /// Latest commit we saw on each PR you commented on, keyed by "owner/repo#123".
     var commentedPRHeads: [String: String] = [:]
+    /// Your PRs that had failed CI or merge conflicts last poll, so we alert only when one flips.
+    var failingCIPRKeys: Set<String> = []
+    var conflictingPRKeys: Set<String> = []
 
     private static let file = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".local/state/pr-watch-app/seen.json")
@@ -97,5 +100,17 @@ struct SeenState: Codable {
         try? FileManager.default.createDirectory(at: Self.file.deletingLastPathComponent(),
                                                  withIntermediateDirectories: true)
         try? JSONEncoder().encode(self).write(to: Self.file)
+    }
+}
+
+extension SeenState {
+    /// Fills in missing fields with defaults, so a file saved by an older version still loads.
+    init(from decoder: Decoder) throws {
+        let saved = try decoder.container(keyedBy: CodingKeys.self)
+        alertedVersions = try saved.decodeIfPresent(Set<String>.self, forKey: .alertedVersions) ?? []
+        viewedVersions = try saved.decodeIfPresent(Set<String>.self, forKey: .viewedVersions) ?? []
+        commentedPRHeads = try saved.decodeIfPresent([String: String].self, forKey: .commentedPRHeads) ?? [:]
+        failingCIPRKeys = try saved.decodeIfPresent(Set<String>.self, forKey: .failingCIPRKeys) ?? []
+        conflictingPRKeys = try saved.decodeIfPresent(Set<String>.self, forKey: .conflictingPRKeys) ?? []
     }
 }

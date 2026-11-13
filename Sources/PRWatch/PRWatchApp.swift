@@ -44,7 +44,7 @@ private func savePanelSnapshot(to path: String) {
 
 private func badgeCount(for state: BarState) -> Int? {
     switch state {
-    case .ciFailed(let count), .newActivity(let count): return count
+    case .needsFix(let count), .newActivity(let count): return count
     case .alertsPaused(let newCount): return newCount > 0 ? newCount : nil
     default: return nil
     }
@@ -55,7 +55,7 @@ private func badgeCount(for state: BarState) -> Int? {
 private func menuBarImage(for state: BarState) -> NSImage {
     let (symbolName, tint): (String, NSColor?) = switch state {
     case .offline: ("icloud.slash", nil)
-    case .ciFailed: ("xmark.circle", .systemRed)
+    case .needsFix: ("xmark.circle", .systemRed)
     case .ciRunning: ("arrow.triangle.2.circlepath", .systemOrange)
     case .alertsPaused: ("bell.slash", nil)
     case .newActivity: ("arrow.triangle.pull", .systemBlue)

@@ -3,7 +3,8 @@ import AppKit
 /// What the menu bar icon is saying, most urgent first.
 enum BarState: Equatable {
     case offline
-    case ciFailed(count: Int)
+    /// Your PRs with failed CI or merge conflicts.
+    case needsFix(count: Int)
     case ciRunning
     case alertsPaused(newCount: Int)
     case newActivity(count: Int)
@@ -71,7 +72,8 @@ final class Store: ObservableObject {
     /// One Mac alert waiting to go out.
     private struct PendingAlert {
         let heading, message, repo: String
-        let prNumber: Int?
+        /// Skip the alert if you did the latest thing on this PR. Nil to always send it.
+        let lastActorCheckPRNumber: Int?
         let url: URL
     }
 
@@ -80,8 +82,15 @@ final class Store: ObservableObject {
         let freshVersions = Set(freshSnapshot.notifications.map(\.version))
         let unalertedItems = freshSnapshot.notifications.filter { !seenState.alertedVersions.contains($0.version) }
         let previousHeads = seenState.commentedPRHeads
+        let previousFailingCIKeys = seenState.failingCIPRKeys
+        let previousConflictingKeys = seenState.conflictingPRKeys
         seenState.alertedVersions = freshVersions
         seenState.commentedPRHeads = freshSnapshot.commentedPRs.mapValues(\.headRefOid)
+        seenState.failingCIPRKeys = Set(freshSnapshot.myPRs.filter(\.ciFailed).map(\.id))
+        // GitHub says UNKNOWN while it rechecks, so keep a conflicting PR flagged until it says MERGEABLE.
+        seenState.conflictingPRKeys = Set(freshSnapshot.myPRs.filter {
+            $0.hasConflicts || ($0.mergeCheckPending && previousConflictingKeys.contains($0.id))
+        }.map(\.id))
         let isBaselinePoll = !hasSeenBaseline
         if isBaselinePoll {
             seenState.viewedVersions = freshVersions
@@ -98,19 +107,34 @@ final class Store: ObservableObject {
                 guard let previousHead = previousHeads[pr.key], previousHead != pr.headRefOid else { continue }
                 let commitsPage = URL(string: "https://github.com/\(pr.repository.nameWithOwner)/pull/\(pr.number)/commits")!
                 pendingAlerts.append(PendingAlert(heading: "New commits pushed", message: pr.title,
-                                                  repo: pr.repository.nameWithOwner, prNumber: pr.number, url: commitsPage))
+                                                  repo: pr.repository.nameWithOwner, lastActorCheckPRNumber: pr.number,
+                                                  url: commitsPage))
+            }
+        }
+        // No last-actor check here: your own push is usually what broke CI, and you still want to know.
+        for pr in freshSnapshot.myPRs where config.watches(repo: pr.repository.nameWithOwner) {
+            if config.notifyOnCI, pr.ciFailed, !previousFailingCIKeys.contains(pr.id) {
+                pendingAlerts.append(PendingAlert(heading: "CI failed on your PR", message: pr.title,
+                                                  repo: pr.repository.nameWithOwner, lastActorCheckPRNumber: nil,
+                                                  url: pr.url.appendingPathComponent("checks")))
+            }
+            if config.notifyOnMyPRs, pr.hasConflicts, !previousConflictingKeys.contains(pr.id) {
+                pendingAlerts.append(PendingAlert(heading: "Merge conflicts on your PR", message: pr.title,
+                                                  repo: pr.repository.nameWithOwner, lastActorCheckPRNumber: nil,
+                                                  url: pr.url))
             }
         }
         for item in unalertedItems {
             guard let heading = Alerts.heading(for: item, config: config,
                                                commentedPRKeys: freshSnapshot.commentedPRKeys) else { continue }
             pendingAlerts.append(PendingAlert(heading: heading, message: item.subject.title,
-                                              repo: item.repository.fullName, prNumber: item.prNumber, url: item.webURL))
+                                              repo: item.repository.fullName, lastActorCheckPRNumber: item.prNumber,
+                                              url: item.webURL))
         }
         guard !pendingAlerts.isEmpty else { return }
         Task.detached {
             for alert in pendingAlerts {
-                if let prNumber = alert.prNumber, GitHub.viewerActedLast(repo: alert.repo, number: prNumber) { continue }
+                if let prNumber = alert.lastActorCheckPRNumber, GitHub.viewerActedLast(repo: alert.repo, number: prNumber) { continue }
                 Alerts.send(heading: alert.heading, message: alert.message, subtitle: alert.repo, url: alert.url)
             }
         }
@@ -137,11 +161,11 @@ final class Store: ObservableObject {
         }
     }
 
-    var failingPRs: [PullRequest] { snapshot.myPRs.filter(\.ciFailed) }
+    var prsNeedingFix: [PullRequest] { snapshot.myPRs.filter(\.needsFix) }
 
     var barState: BarState {
         if failedPollsInARow >= 2 || (lastCheckedAt == nil && lastErrorMessage != nil) { return .offline }
-        if !failingPRs.isEmpty { return .ciFailed(count: failingPRs.count) }
+        if !prsNeedingFix.isEmpty { return .needsFix(count: prsNeedingFix.count) }
         if snapshot.myPRs.contains(where: \.ciRunning) { return .ciRunning }
         let newItemCount = alertWorthyNotifications.filter(isNew).count
         if alertsPaused { return .alertsPaused(newCount: newItemCount) }
@@ -154,7 +178,12 @@ final class Store: ObservableObject {
             ?? "checking…"
         switch barState {
         case .offline: return "Can't reach GitHub · retrying every minute"
-        case .ciFailed(let count): return "CI failed on \(count) of your PRs · \(checkedText)"
+        case .needsFix:
+            let failedCount = prsNeedingFix.filter(\.ciFailed).count
+            let conflictCount = prsNeedingFix.filter(\.hasConflicts).count
+            let problems = [failedCount > 0 ? "CI failed on \(failedCount)" : nil,
+                            conflictCount > 0 ? "conflicts on \(conflictCount)" : nil].compactMap { $0 }
+            return "\(problems.joined(separator: ", ")) · \(checkedText)"
         case .ciRunning: return "CI running · \(checkedText)"
         case .alertsPaused:
             let resumeTime = alertsPausedUntil?.formatted(date: .omitted, time: .shortened) ?? ""

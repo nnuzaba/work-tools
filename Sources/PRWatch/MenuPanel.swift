@@ -118,7 +118,7 @@ struct MenuPanel: View {
 
     /// Orders your PRs so the ones that need you come first and drafts sink to the bottom.
     private func urgencyRank(_ pr: PullRequest) -> Int {
-        if pr.ciFailed { return 0 }
+        if pr.needsFix { return 0 }
         if pr.reviewDecision == "CHANGES_REQUESTED" { return 1 }
         if pr.ciRunning { return 2 }
         if pr.reviewDecision == "APPROVED" { return 3 }
@@ -126,7 +126,9 @@ struct MenuPanel: View {
     }
 
     private func statusSummary(for pr: PullRequest) -> (octicon: Octicon, tint: Color, detail: String) {
+        if pr.ciFailed && pr.hasConflicts { return (.failed, GitHubColor.failed, "CI failed · merge conflicts") }
         if pr.ciFailed { return (.failed, GitHubColor.failed, "CI failed") }
+        if pr.hasConflicts { return (.conflicts, GitHubColor.failed, "merge conflicts") }
         if pr.ciRunning { return (.running, GitHubColor.pending, "CI running") }
         if pr.isDraft { return (.draftPullRequest, GitHubColor.neutral, "draft") }
         switch pr.reviewDecision {

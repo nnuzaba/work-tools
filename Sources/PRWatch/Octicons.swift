@@ -7,6 +7,7 @@ enum Octicon: String {
     case pullRequest = "git-pull-request-16"
     case draftPullRequest = "git-pull-request-draft-16"
     case failed = "x-circle-16"
+    case conflicts = "alert-16"
     case running = "dot-fill-16"
     case approved = "check-circle-16"
     case changesRequested = "file-diff-16"

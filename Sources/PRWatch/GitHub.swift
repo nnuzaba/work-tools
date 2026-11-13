@@ -7,6 +7,8 @@ struct PullRequest: Identifiable, Decodable {
     let url: URL
     let isDraft: Bool
     let reviewDecision: String?
+    /// GitHub's merge check: MERGEABLE, CONFLICTING, or UNKNOWN while it's still working it out.
+    let mergeable: String
     let repository: Repo
     let commits: Commits
 
@@ -23,6 +25,10 @@ struct PullRequest: Identifiable, Decodable {
     var ciState: String? { commits.nodes.first?.commit.statusCheckRollup?.state }
     var ciFailed: Bool { ciState == "FAILURE" || ciState == "ERROR" }
     var ciRunning: Bool { ciState == "PENDING" || ciState == "EXPECTED" }
+    var hasConflicts: Bool { mergeable == "CONFLICTING" }
+    var mergeCheckPending: Bool { mergeable == "UNKNOWN" }
+    /// CI failed or the branch conflicts with its base. Either way you have something to fix.
+    var needsFix: Bool { ciFailed || hasConflicts }
 }
 
 /// One unread item from github.com/notifications.
@@ -106,7 +112,7 @@ enum GitHub {
     }
     fragment prKey on PullRequest { number title headRefOid repository { nameWithOwner } }
     fragment prFields on PullRequest {
-      number title url isDraft reviewDecision
+      number title url isDraft reviewDecision mergeable
       repository { nameWithOwner }
       commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
     }
