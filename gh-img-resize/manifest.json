@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "GitHub Image Resizer",
+  "version": "0.1.0",
+  "description": "Drag to resize images in GitHub comment previews, and shrink new uploads to a default width.",
+  "permissions": ["storage"],
+  "action": { "default_popup": "popup.html" },
+  "content_scripts": [
+    {
+      "matches": ["https://github.com/*"],
+      "js": ["lib.js", "content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
