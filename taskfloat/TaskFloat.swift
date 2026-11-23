@@ -323,6 +323,48 @@ struct FlickeringFire: NSViewRepresentable {
     func updateNSView(_ view: FireView, context: Context) {}
 }
 
+/// A round yellow-to-orange disc that glows brighter than normal white on an HDR screen, so the paused icon is hard to miss.
+/// It uses colors tagged with extra brightness ("headroom") and asks Core Animation to show them in high dynamic range.
+/// On a screen without HDR the colors are clipped to the normal range and it looks like a plain yellow circle.
+final class HDRDiscView: NSView {
+    /// How many times brighter than SDR white the brightest part may get. The screen's own limit caps it.
+    private static let headroom: Float = 4
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        let disc = CAGradientLayer()
+        disc.frame = bounds
+        disc.cornerRadius = bounds.width / 2
+        disc.masksToBounds = true
+        // Layer y runs upward, so the brighter yellow starts at the top.
+        disc.startPoint = CGPoint(x: 0.5, y: 1)
+        disc.endPoint = CGPoint(x: 0.5, y: 0)
+        disc.colors = [Self.hdrColor(hex: 0xFFD43B, brightness: 4), Self.hdrColor(hex: 0xFF9F1C, brightness: 2.5)]
+        disc.preferredDynamicRange = .high
+        layer?.addSublayer(disc)
+    }
+
+    required init?(coder: NSCoder) { fatalError("HDRDiscView is only made in code") }
+
+    /// Turns an sRGB hex color into linear light, multiplies it by `brightness`, and tags it with the headroom.
+    private static func hdrColor(hex: UInt32, brightness: CGFloat) -> CGColor {
+        func linear(_ byte: UInt32) -> CGFloat {
+            let value = CGFloat(byte & 0xFF) / 255
+            return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+        let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!
+        return CGColor(headroom: headroom, colorSpace: space, red: linear(hex >> 16) * brightness,
+                       green: linear(hex >> 8) * brightness, blue: linear(hex) * brightness, alpha: 1)!
+    }
+}
+
+/// Puts a 40-point `HDRDiscView` into SwiftUI.
+struct HDRDisc: NSViewRepresentable {
+    func makeNSView(context: Context) -> HDRDiscView { HDRDiscView(frame: NSRect(x: 0, y: 0, width: 40, height: 40)) }
+    func updateNSView(_ view: HDRDiscView, context: Context) {}
+}
+
 /// Running tasks get big colorful cards. Up next and Done fold away under tappable headers.
 struct ContentView: View {
     @ObservedObject var store: TaskStore
@@ -334,11 +376,12 @@ struct ContentView: View {
     }
 
     /// The round icon shown while the panel isn't focused: a flickering fire while a task runs,
-    /// or a yellow warning-style pause icon when nothing does, so idle time stands out.
+    /// or a glowing HDR yellow pause icon when nothing does, so idle time stands out.
+    /// While running, a badge shows how many task cards are open if it's more than one.
     /// Hover shows the task's name. Clicking it focuses the panel, which opens it.
     private var collapsedPill: some View {
         let runningTask = store.alphabetical.first { $0.startedAt != nil }
-        let idleColors = [Color(hex: 0xFFD43B), Color(hex: 0xFF9F1C)]
+        let openCardCount = store.tasks.filter(\.showsAsCard).count
         let fireBackground = [Color(hex: 0x3A1F14), Color(hex: 0x1A0F0C)]
         return Button {
             NSApp.windows.first { $0 is FloatingPanel }?.makeKey()
@@ -352,12 +395,26 @@ struct ContentView: View {
                 }
             }
             .frame(width: 40, height: 40)
-            .background(Circle().fill(LinearGradient(colors: runningTask == nil ? idleColors : fireBackground,
-                                                      startPoint: .top, endPoint: .bottom)))
+            .background {
+                if runningTask == nil {
+                    HDRDisc()
+                } else {
+                    Circle().fill(LinearGradient(colors: fireBackground, startPoint: .top, endPoint: .bottom))
+                }
+            }
         }
         .buttonStyle(Pressable())
         .help(runningTask?.title ?? "Nothing running")
         .padding(4)
+        // Drawn over the padding so the badge stays inside the small window.
+        .overlay(alignment: .topTrailing) {
+            if runningTask != nil && openCardCount > 1 {
+                Text("\(openCardCount)").font(.system(size: 10, weight: .heavy, design: .rounded)).foregroundStyle(.white)
+                    .frame(minWidth: 16, minHeight: 16)
+                    .background(Circle().fill(Color(hex: 0xE5383B)))
+                    .allowsHitTesting(false)
+            }
+        }
         // Waits a turn before resizing, since resizing the window mid-layout can make layout loop forever.
         .onGeometryChange(for: CGSize.self) { $0.size } action: { pillSize in
             DispatchQueue.main.async { [ui] in
