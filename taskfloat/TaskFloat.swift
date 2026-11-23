@@ -181,6 +181,8 @@ final class PanelState: ObservableObject {
     @Published var showDone = false
     @Published var renamingTaskID: UUID?
     @Published var renameDraft = ""
+    /// True while the panel is shrunk to a small pill because it isn't the focused window.
+    @Published var isCollapsedToPill = false
     @Published var themeName = UserDefaults.standard.string(forKey: "theme") ?? themes[0].name {
         didSet { UserDefaults.standard.set(themeName, forKey: "theme") }
     }
@@ -263,6 +265,41 @@ struct ContentView: View {
     @FocusState private var renameFieldFocused: Bool
 
     var body: some View {
+        if ui.isCollapsedToPill { collapsedPill } else { fullPanel }
+    }
+
+    /// The round icon shown while the panel isn't focused: a play icon in the task's colors while a task runs,
+    /// or a yellow warning-style pause icon when nothing does, so idle time stands out.
+    /// Hover shows the task's name. Clicking it focuses the panel, which opens it.
+    private var collapsedPill: some View {
+        let runningTask = store.alphabetical.first { $0.startedAt != nil }
+        let idleColors = [Color(hex: 0xFFD43B), Color(hex: 0xFF9F1C)]
+        return Button {
+            NSApp.windows.first { $0 is FloatingPanel }?.makeKey()
+        } label: {
+            Image(systemName: runningTask == nil ? "pause.fill" : "play.fill")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(runningTask == nil ? Color.black.opacity(0.75) : Color.white)
+                .frame(width: 40, height: 40)
+                .background(Circle().fill(LinearGradient(colors: runningTask.map(colors) ?? idleColors,
+                                                          startPoint: .topLeading, endPoint: .bottomTrailing)))
+        }
+        .buttonStyle(Pressable())
+        .help(runningTask?.title ?? "Nothing running")
+        .padding(4)
+        // Waits a turn before resizing, since resizing the window mid-layout can make layout loop forever.
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { pillSize in
+            DispatchQueue.main.async { [ui] in
+                guard ui.isCollapsedToPill else { return }
+                (NSApp.windows.first { $0 is FloatingPanel } as? FloatingPanel)?.collapse(toContentSize: pillSize)
+            }
+        }
+        // Measured before this, so the window isn't made taller by the hidden title bar's height.
+        .ignoresSafeArea()
+        .environment(\.colorScheme, ui.theme.isDark ? .dark : .light)
+    }
+
+    @ViewBuilder private var fullPanel: some View {
         let sorted = store.alphabetical
         let cardTasks = sorted.filter(\.showsAsCard)
         let todo = sorted.filter { !$0.showsAsCard && $0.doneMinutes == nil }
@@ -312,7 +349,9 @@ struct ContentView: View {
                     if cardTasks.isEmpty {
                         emptyCard(next: todo.first)
                     } else {
-                        VStack(spacing: 6) { ForEach(cardTasks) { taskCard($0) } }
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            VStack(spacing: 8) { ForEach(cardTasks) { taskCard($0, now: context.date) } }
+                        }
                     }
                     if !todo.isEmpty {
                         section("Up next", detail: "\(todo.count)", isOpen: $ui.showTodo)
@@ -342,10 +381,14 @@ struct ContentView: View {
     }
 
     /// A big card for a task that's running, or paused but kept on screen. Paused cards fade a bit.
-    private func taskCard(_ task: TaskItem) -> some View {
+    private func taskCard(_ task: TaskItem, now: Date) -> some View {
         let isRunning = task.startedAt != nil
-        return HStack(spacing: 4) {
-            titleOrRenameField(task).font(.headline).lineLimit(2)
+        return HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 2) {
+                titleOrRenameField(task).font(.headline).lineLimit(2)
+                Text(clock(task.elapsed(at: now)) + (isRunning ? "" : " · paused"))
+                    .font(.callout.weight(.medium)).monospacedDigit().opacity(0.8)
+            }
             Spacer()
             if isRunning {
                 roundButton("pause.fill", help: "Pause") { act { store.pause(task.id, keepOnCard: true) } }
@@ -359,7 +402,7 @@ struct ContentView: View {
         }
         .opacity(isRunning ? 1 : 0.75)
         .foregroundStyle(.white)
-        .padding(.horizontal, 12).padding(.vertical, 7)
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(LinearGradient(colors: colors(task), startPoint: .topLeading, endPoint: .bottomTrailing)
             .opacity(ui.theme.isGlass ? 0.55 : 1), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -440,8 +483,8 @@ struct ContentView: View {
 
     private func roundButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 10, weight: .bold))
-                .frame(width: 24, height: 24).background(.white.opacity(0.25), in: Circle())
+            Image(systemName: symbol).font(.system(size: 12, weight: .bold))
+                .frame(width: 30, height: 30).background(.white.opacity(0.25), in: Circle())
         }
         .help(help)
     }
@@ -499,6 +542,11 @@ struct ContentView: View {
             ui.showTodo = false
         }
     }
+
+    private func clock(_ seconds: TimeInterval) -> String {
+        let s = Int(seconds)
+        return String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
+    }
 }
 
 /// The empty strip behind the header that moves the panel.
@@ -551,6 +599,9 @@ struct DragHandle: NSViewRepresentable {
 /// Clicking it does not pull focus away from the app you are working in.
 final class FloatingPanel: NSPanel {
     private var fittedHeight: CGFloat?
+    /// The full panel's frame, kept while the panel is shrunk to a pill so it can grow back to the same spot.
+    private var frameBeforeCollapse: NSRect?
+    private var growAnimationRunning = false
 
     init(content: NSView) {
         super.init(contentRect: NSRect(x: 0, y: 0, width: 300, height: 320),
@@ -599,12 +650,44 @@ final class FloatingPanel: NSPanel {
     /// A panel in the bottom half of the screen keeps its bottom edge still, so it stays tucked in a bottom corner.
     /// Skips heights it already fit to, so dragging the panel taller by hand sticks until the list changes.
     func fitHeight(adding change: CGFloat) {
-        guard isVisible, let area = screen?.visibleFrame else { return }
+        guard isVisible, frameBeforeCollapse == nil, !growAnimationRunning, let area = screen?.visibleFrame else { return }
         let height = min(frame.height + change, area.height - 24)
         guard abs(height - (fittedHeight ?? frame.height)) > 0.5 else { return }
         fittedHeight = height
         let originY = frame.midY < area.midY ? frame.minY : frame.maxY - height
         setFrame(keepingHeaderOnScreen(NSRect(x: frame.minX, y: originY, width: frame.width, height: height)), display: true)
+    }
+
+    /// Shrinks the panel to fit the pill, pinned to whichever corner of the full panel is nearest a screen edge.
+    /// Called again when the pill changes size. The saved frame stays the full one, so a restart doesn't open as a pill.
+    func collapse(toContentSize contentSize: NSSize) {
+        guard let area = screen?.visibleFrame else { return }
+        let full = frameBeforeCollapse ?? frame
+        if frameBeforeCollapse == nil {
+            frameBeforeCollapse = full
+            setFrameAutosaveName("")
+        }
+        // The content fills the whole window, title bar included, so the window is exactly the pill's size.
+        let pillSize = contentSize
+        let x = full.midX > area.midX ? full.maxX - pillSize.width : full.minX
+        let y = full.midY < area.midY ? full.minY : full.maxY - pillSize.height
+        setFrame(NSRect(origin: NSPoint(x: x, y: y), size: pillSize), display: true)
+    }
+
+    /// Grows the pill back into the full panel where it was before, with a quick ease-out.
+    /// Height fitting waits until the grow is done, so it can't cut the animation short.
+    func expand() {
+        guard let full = frameBeforeCollapse else { return }
+        frameBeforeCollapse = nil
+        growAnimationRunning = true
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.22
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            animator().setFrame(keepingHeaderOnScreen(full), display: true)
+        } completionHandler: { [self] in
+            growAnimationRunning = false
+            setFrameAutosaveName("TaskFloat")
+        }
     }
 
     /// If the panel was let go within 80 points of a screen corner, glides it neatly into that corner.
@@ -655,6 +738,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hosting = NSHostingView(rootView: ContentView(store: store, ui: ui))
         // Let the user drag the window to any size instead of snapping it to the content's size.
         hosting.sizingOptions = [.minSize]
+        // The title bar is hidden, so its safe area would only add empty space, which made the pill window too tall.
+        hosting.safeAreaRegions = []
         let panel = FloatingPanel(content: hosting)
         panel.orderFrontRegardless()
         self.panel = panel
@@ -662,10 +747,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async { ui.fitPanelToList() }
         addMenuBarItem()
         registerToggleHotKey()
+        collapseToPillWhenUnfocused(panel, ui: ui)
         let workspaceEvents = NSWorkspace.shared.notificationCenter
         for sleepEvent in [NSWorkspace.screensDidSleepNotification, NSWorkspace.willSleepNotification] {
             workspaceEvents.addObserver(self, selector: #selector(pauseAllForSleep), name: sleepEvent, object: nil)
         }
+    }
+
+    /// Shows the full panel while it's the focused window, and a small pill once you click into another window.
+    /// The pill shrinks the window itself once SwiftUI has measured it. It starts as a pill, since it starts unfocused.
+    @MainActor private func collapseToPillWhenUnfocused(_ panel: FloatingPanel, ui: PanelState) {
+        let events = NotificationCenter.default
+        events.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { _ in
+            MainActor.assumeIsolated { ui.isCollapsedToPill = true }
+        }
+        events.addObserver(forName: NSWindow.didBecomeKeyNotification, object: panel, queue: .main) { _ in
+            MainActor.assumeIsolated {
+                panel.expand()
+                ui.isCollapsedToPill = false
+            }
+        }
+        ui.isCollapsedToPill = true
     }
 
     /// Pauses every running task when the display or the whole Mac goes to sleep, so idle time isn't counted.
