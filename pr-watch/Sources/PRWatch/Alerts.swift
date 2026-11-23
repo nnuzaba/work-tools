@@ -9,6 +9,8 @@ struct WatchConfig {
     var notifyOnPushesToPRsICommented = true
     var notifyOnAllMentions = false
     var watchedReposPattern = "."
+    /// Full path to `gh`, for installs outside Homebrew. Nil means look in Homebrew's folders.
+    var ghPath: String?
 
     static func load() -> WatchConfig {
         var config = WatchConfig()
@@ -27,6 +29,7 @@ struct WatchConfig {
             case "notify_on_pushes_to_prs_i_commented": config.notifyOnPushesToPRsICommented = isYes
             case "notify_on_all_mentions": config.notifyOnAllMentions = isYes
             case "watched_repos_pattern": config.watchedReposPattern = parts[1]
+            case "gh_path": config.ghPath = (parts[1] as NSString).expandingTildeInPath
             default: break
             }
         }

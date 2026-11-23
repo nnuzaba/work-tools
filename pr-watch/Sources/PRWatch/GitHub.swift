@@ -122,9 +122,11 @@ struct GitHubError: Error {
 
 /// Talks to GitHub through the `gh` CLI, so it reuses your existing login.
 enum GitHub {
-    /// Apps opened from Finder get a bare PATH, so look in Homebrew's spots directly.
-    static let ghPath = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh"]
-        .first { FileManager.default.isExecutableFile(atPath: $0) } ?? "/usr/bin/false"
+    /// Apps opened from Finder get a bare PATH, so use `gh_path` from the config, else Homebrew's spots.
+    static var ghPath: String {
+        let candidates = [WatchConfig.load().ghPath, "/opt/homebrew/bin/gh", "/usr/local/bin/gh"].compactMap { $0 }
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) } ?? "/usr/bin/false"
+    }
 
     private static let pullRequestQuery = """
     query {

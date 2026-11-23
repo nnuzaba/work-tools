@@ -1,0 +1,27 @@
+# PR Watch settings. Copy this file to ~/.config/pr-watch/config and edit it.
+# Every setting is optional; a missing file means the defaults shown here.
+# Use yes or no. Changes apply on the next poll (within a minute).
+
+# Reviews, comments, and merges on PRs you opened.
+notify_on_my_prs=yes
+
+# CI runs you started finish (pass or fail).
+notify_on_ci=yes
+
+# New comments or reviews on someone else's PR that you commented on or reviewed.
+# This also covers review requests: you only hear about them on PRs you already commented on.
+notify_on_prs_i_commented=yes
+
+# New commits pushed to someone else's PR that you commented on or reviewed.
+notify_on_pushes_to_prs_i_commented=yes
+
+# yes = every @mention, even on PRs you never commented on.
+notify_on_all_mentions=no
+
+# Only watch repos whose "owner/name" matches this regex. '.' means all repos.
+# Example: watched_repos_pattern='^my-org/'
+watched_repos_pattern='.'
+
+# Full path to the gh CLI. Only needed if gh isn't in /opt/homebrew/bin or /usr/local/bin.
+# Find it with: which gh
+# gh_path=~/.local/bin/gh
