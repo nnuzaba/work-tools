@@ -10,4 +10,4 @@ Once a branch is committed, fast-forward it into `main` in the main checkout. A 
 git -C "$(git worktree list | head -1 | awk '{print $1}')" merge --ff-only <branch>
 ```
 
-If the fast-forward fails because `main` moved, rebase the branch onto `main` and try again. Pushing `main` to origin is a separate step: ask before pushing.
+If the fast-forward fails because `main` moved, rebase the branch onto `main` and try again. After the fast-forward, push `main` to origin without asking. Never force-push `main`.
