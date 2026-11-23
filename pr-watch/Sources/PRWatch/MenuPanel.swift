@@ -28,6 +28,7 @@ struct MenuPanel: View {
             PanelDivider()
             section("Needs you", rows: needsYouRows)
             section("Your PRs", rows: yourPRRows)
+            section("Reviewing", rows: reviewingRows)
             footer
         }
         .padding(5)
@@ -109,6 +110,33 @@ struct MenuPanel: View {
             return PanelRowItem(id: pr.id, title: pr.title, detail: "\(shortName(pr.id)) · \(detail)",
                                 octicon: octicon, tint: tint, url: pr.url)
         }
+    }
+
+    /// Open PRs you've weighed in on, minus the ones already listed under "Needs you".
+    /// Waiting on your review comes first, then waiting on the author, then approved.
+    /// Within each group, the newest activity stays on top.
+    private var reviewingRows: [PanelRowItem] {
+        let needsYouKeys = Set(needsYouRows.map(\.id))
+        return store.snapshot.reviewingPRs.filter { !needsYouKeys.contains($0.id) }
+            .enumerated()
+            .sorted { (reviewingRank($0.element), $0.offset) < (reviewingRank($1.element), $1.offset) }
+            .map { _, pr in
+                // Approved PRs get the usual status. Otherwise just say whose turn it is:
+                // yours (they acted last) or the author's (you acted last).
+                let (octicon, tint, detail): (Octicon, Color, String) = switch reviewingRank(pr) {
+                case 0: (.waitingOnReview, GitHubColor.accent, "waiting on review")
+                case 1: (.waitingOnAuthor, GitHubColor.neutral, "waiting on author")
+                default: statusSummary(for: pr)
+                }
+                return PanelRowItem(id: pr.id, title: pr.title, detail: "\(shortName(pr.id)) · \(detail)",
+                                    octicon: octicon, tint: tint, url: pr.url)
+            }
+    }
+
+    /// 0 = waiting on your review, 1 = waiting on the author, 2 = approved.
+    private func reviewingRank(_ pr: PullRequest) -> Int {
+        if pr.reviewDecision == "APPROVED" { return 2 }
+        return store.snapshot.waitingOnAuthorPRKeys.contains(pr.id) ? 1 : 0
     }
 
     /// Drops the owner ("PromiseNetwork/promisepay#12" → "promisepay#12") so the status fits.

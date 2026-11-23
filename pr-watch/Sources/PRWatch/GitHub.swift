@@ -9,10 +9,37 @@ struct PullRequest: Identifiable, Decodable {
     let reviewDecision: String?
     /// GitHub's merge check: MERGEABLE, CONFLICTING, or UNKNOWN while it's still working it out.
     let mergeable: String
+    /// OPEN, CLOSED, or MERGED.
+    let state: String
+    let updatedAt: Date
     let repository: Repo
     let commits: Commits
+    /// The last few comments, reviews, and pushes. Only fetched for PRs you commented on or reviewed.
+    let timelineItems: Timeline?
 
     struct Repo: Decodable { let nameWithOwner: String }
+    struct Timeline: Decodable { let nodes: [TimelineEvent] }
+    /// One timeline entry. Comments and reviews have an `author`, events have an `actor`,
+    /// and pushes have a `commit`. Entry types the query doesn't ask about decode as all nil.
+    struct TimelineEvent: Decodable {
+        let author: Account?
+        let actor: Account?
+        let commit: PushedCommit?
+
+        /// Who did it, or nil if it was a bot or GitHub can't tell.
+        var humanLogin: String? {
+            let account = author ?? actor
+            if let account { return account.kind == "Bot" ? nil : account.login }
+            return commit?.author?.user?.login
+        }
+    }
+    struct Account: Decodable { let login: String; let kind: String }
+    struct PushedCommit: Decodable { let author: CommitAuthor? }
+    struct CommitAuthor: Decodable { let user: CommitUser? }
+    struct CommitUser: Decodable { let login: String }
+
+    /// Login of the last person (not bot) who commented, reviewed, pushed, or re-requested review.
+    var lastHumanLogin: String? { timelineItems?.nodes.reversed().lazy.compactMap(\.humanLogin).first }
     struct Commits: Decodable { let nodes: [Node] }
     struct Node: Decodable { let commit: Commit }
     struct Commit: Decodable { let statusCheckRollup: Rollup? }
@@ -68,6 +95,10 @@ struct GitHubNotification: Identifiable, Decodable {
 struct Snapshot {
     var myPRs: [PullRequest] = []
     var reviewRequests: [PullRequest] = []
+    /// Open PRs by someone else that you commented on or reviewed, newest activity first.
+    var reviewingPRs: [PullRequest] = []
+    /// Reviewing PRs where you did the latest thing, so the ball is in the author's court.
+    var waitingOnAuthorPRKeys: Set<String> = []
     var notifications: [GitHubNotification] = []
     /// Someone else's PRs you commented on or reviewed, keyed by "owner/repo#123".
     var commentedPRs: [String: CommentedPR] = [:]
@@ -97,6 +128,7 @@ enum GitHub {
 
     private static let pullRequestQuery = """
     query {
+      viewer { login }
       mine: search(query: "is:pr is:open author:@me archived:false sort:updated-desc", type: ISSUE, first: 20) {
         nodes { ...prFields }
       }
@@ -110,9 +142,23 @@ enum GitHub {
         nodes { ...prKey }
       }
     }
-    fragment prKey on PullRequest { number title headRefOid repository { nameWithOwner } }
+    fragment prKey on PullRequest {
+      ...prFields headRefOid
+      timelineItems(last: 5, itemTypes: [ISSUE_COMMENT, PULL_REQUEST_REVIEW, PULL_REQUEST_COMMIT,
+          REOPENED_EVENT, REVIEW_REQUESTED_EVENT, READY_FOR_REVIEW_EVENT, HEAD_REF_FORCE_PUSHED_EVENT]) {
+        nodes {
+          ... on IssueComment { author { login kind: __typename } }
+          ... on PullRequestReview { author { login kind: __typename } }
+          ... on PullRequestCommit { commit { author { user { login } } } }
+          ... on ReopenedEvent { actor { login kind: __typename } }
+          ... on ReviewRequestedEvent { actor { login kind: __typename } }
+          ... on ReadyForReviewEvent { actor { login kind: __typename } }
+          ... on HeadRefForcePushedEvent { actor { login kind: __typename } }
+        }
+      }
+    }
     fragment prFields on PullRequest {
-      number title url isDraft reviewDecision mergeable
+      number title url isDraft reviewDecision mergeable state updatedAt
       repository { nameWithOwner }
       commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
     }
@@ -141,9 +187,19 @@ enum GitHub {
     static func fetchSnapshot() throws -> Snapshot {
         struct SearchResponse: Decodable {
             let data: Results
-            struct Results: Decodable { let mine, review: Search; let commented, reviewed: KeySearch }
+            struct Results: Decodable { let viewer: Viewer; let mine, review: Search; let commented, reviewed: KeySearch }
+            struct Viewer: Decodable { let login: String }
             struct Search: Decodable { let nodes: [PullRequest] }
-            struct KeySearch: Decodable { let nodes: [CommentedPR] }
+            struct KeySearch: Decodable { let nodes: [CommentedNode] }
+        }
+        /// Each commented/reviewed result feeds both the alerts (CommentedPR) and the panel (PullRequest).
+        struct CommentedNode: Decodable {
+            let pullRequest: PullRequest
+            let commentedPR: CommentedPR
+            init(from decoder: Decoder) throws {
+                pullRequest = try PullRequest(from: decoder)
+                commentedPR = try CommentedPR(from: decoder)
+            }
         }
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
@@ -155,10 +211,16 @@ enum GitHub {
         let notifications = try decoder.decode([GitHubNotification].self, from: notificationData)
             .filter { $0.subject.type == "PullRequest" || $0.subject.type == "CheckSuite" }
 
-        let commentedPRs = Dictionary((search.commented.nodes + search.reviewed.nodes).map { ($0.key, $0) },
+        let commentedNodes = search.commented.nodes + search.reviewed.nodes
+        let commentedPRs = Dictionary(commentedNodes.map { ($0.commentedPR.key, $0.commentedPR) },
                                       uniquingKeysWith: { first, _ in first })
-        return Snapshot(myPRs: search.mine.nodes, reviewRequests: search.review.nodes,
-                        notifications: notifications, commentedPRs: commentedPRs)
+        let reviewingPRs = Dictionary(commentedNodes.map { ($0.pullRequest.id, $0.pullRequest) },
+                                      uniquingKeysWith: { first, _ in first })
+            .values.filter { $0.state == "OPEN" }
+            .sorted { $0.updatedAt > $1.updatedAt }
+        let waitingOnAuthorPRKeys = Set(reviewingPRs.filter { $0.lastHumanLogin == search.viewer.login }.map(\.id))
+        return Snapshot(myPRs: search.mine.nodes, reviewRequests: search.review.nodes, reviewingPRs: reviewingPRs,
+                        waitingOnAuthorPRKeys: waitingOnAuthorPRKeys, notifications: notifications, commentedPRs: commentedPRs)
     }
 
     private static let lastActorQuery = """
