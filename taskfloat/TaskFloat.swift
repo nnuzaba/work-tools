@@ -258,6 +258,11 @@ struct Pressable: ButtonStyle {
     }
 }
 
+/// How often the icon's never-ending animations redraw. The screen draws them, not the app, so their cost shows up
+/// under WindowServer: at the laptop's full 120 frames a second, the fire cost it about 18% CPU. Slow motion like
+/// this still looks smooth at 15.
+let iconAnimationFrameRate = CAFrameRateRange(minimum: 10, maximum: 15, preferred: 15)
+
 /// A small flickering fire, drawn in code so the app needs no image files.
 /// Three flame layers stretch and sway out of step. They're Core Animation layers, which the system animates
 /// on its own, so the app does almost no work per frame. Redrawing in SwiftUI cost about 5-7% CPU nonstop.
@@ -296,6 +301,7 @@ final class FireView: NSView {
         flicker.repeatCount = .infinity
         flicker.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         flicker.isRemovedOnCompletion = false
+        flicker.preferredFrameRateRange = iconAnimationFrameRate
         flame.add(flicker, forKey: "flicker")
         layer?.addSublayer(flame)
     }
@@ -364,6 +370,7 @@ final class HDRDiscView: NSView {
         breath.repeatCount = .infinity
         breath.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         breath.isRemovedOnCompletion = false
+        breath.preferredFrameRateRange = iconAnimationFrameRate
         disc.add(breath, forKey: "breath")
     }
 
