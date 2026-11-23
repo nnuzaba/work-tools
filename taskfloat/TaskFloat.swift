@@ -258,6 +258,71 @@ struct Pressable: ButtonStyle {
     }
 }
 
+/// A small flickering fire, drawn in code so the app needs no image files.
+/// Three flame layers stretch and sway out of step. They're Core Animation layers, which the system animates
+/// on its own, so the app does almost no work per frame. Redrawing in SwiftUI cost about 5-7% CPU nonstop.
+final class FireView: NSView {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        addFlame(width: 22, height: 26, colors: [0xFF3D00, 0xFF8A00], seconds: 0.45, swayDegrees: 5)
+        addFlame(width: 15, height: 19, colors: [0xFF8A00, 0xFFD43B], seconds: 0.34, swayDegrees: -7)
+        addFlame(width: 8, height: 11, colors: [0xFFE680, 0xFFFFFF], seconds: 0.27, swayDegrees: 9)
+    }
+
+    required init?(coder: NSCoder) { fatalError("FireView is only made in code") }
+
+    /// Adds one flame: a bottom-to-top gradient cut to a teardrop, standing 6 points above the bottom edge.
+    /// Different `seconds` per flame keep the flames from moving in sync.
+    private func addFlame(width: CGFloat, height: CGFloat, colors: [UInt32], seconds: Double, swayDegrees: CGFloat) {
+        let pixelScale = NSScreen.main?.backingScaleFactor ?? 2
+        let flame = CAGradientLayer()
+        flame.colors = colors.map { CGColor(red: CGFloat($0 >> 16 & 0xFF) / 255, green: CGFloat($0 >> 8 & 0xFF) / 255,
+                                            blue: CGFloat($0 & 0xFF) / 255, alpha: 1) }
+        flame.bounds = CGRect(x: 0, y: 0, width: width, height: height)
+        flame.anchorPoint = CGPoint(x: 0.5, y: 0)
+        flame.position = CGPoint(x: 20, y: 6)
+        flame.contentsScale = pixelScale
+        let teardrop = CAShapeLayer()
+        teardrop.path = Self.teardropPath(width: width, height: height)
+        teardrop.contentsScale = pixelScale
+        flame.mask = teardrop
+
+        let flicker = CABasicAnimation(keyPath: "transform")
+        flicker.fromValue = Self.flameTransform(widthScale: 1.05, heightScale: 0.88, degrees: -swayDegrees)
+        flicker.toValue = Self.flameTransform(widthScale: 0.92, heightScale: 1.15, degrees: swayDegrees)
+        flicker.duration = seconds
+        flicker.autoreverses = true
+        flicker.repeatCount = .infinity
+        flicker.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        flicker.isRemovedOnCompletion = false
+        flame.add(flicker, forKey: "flicker")
+        layer?.addSublayer(flame)
+    }
+
+    /// A teardrop with a round bottom and a pointed tip. Layer y runs upward, so the tip is at `height`.
+    private static func teardropPath(width: CGFloat, height: CGFloat) -> CGPath {
+        let tip = CGPoint(x: width / 2, y: height)
+        let shoulderY = height * 0.55
+        let path = CGMutablePath()
+        path.move(to: tip)
+        path.addCurve(to: CGPoint(x: width / 2, y: 0),
+                      control1: CGPoint(x: width, y: shoulderY), control2: CGPoint(x: width, y: 0))
+        path.addCurve(to: tip, control1: CGPoint(x: 0, y: 0), control2: CGPoint(x: 0, y: shoulderY))
+        return path
+    }
+
+    private static func flameTransform(widthScale: CGFloat, heightScale: CGFloat, degrees: CGFloat) -> NSValue {
+        NSValue(caTransform3D: CATransform3DRotate(CATransform3DMakeScale(widthScale, heightScale, 1), degrees * .pi / 180, 0, 0, 1))
+    }
+}
+
+/// Puts a 40-point `FireView` into SwiftUI.
+struct FlickeringFire: NSViewRepresentable {
+    func makeNSView(context: Context) -> FireView { FireView(frame: NSRect(x: 0, y: 0, width: 40, height: 40)) }
+    func updateNSView(_ view: FireView, context: Context) {}
+}
+
 /// Running tasks get big colorful cards. Up next and Done fold away under tappable headers.
 struct ContentView: View {
     @ObservedObject var store: TaskStore
@@ -268,21 +333,27 @@ struct ContentView: View {
         if ui.isCollapsedToPill { collapsedPill } else { fullPanel }
     }
 
-    /// The round icon shown while the panel isn't focused: a play icon in the task's colors while a task runs,
+    /// The round icon shown while the panel isn't focused: a flickering fire while a task runs,
     /// or a yellow warning-style pause icon when nothing does, so idle time stands out.
     /// Hover shows the task's name. Clicking it focuses the panel, which opens it.
     private var collapsedPill: some View {
         let runningTask = store.alphabetical.first { $0.startedAt != nil }
         let idleColors = [Color(hex: 0xFFD43B), Color(hex: 0xFF9F1C)]
+        let fireBackground = [Color(hex: 0x3A1F14), Color(hex: 0x1A0F0C)]
         return Button {
             NSApp.windows.first { $0 is FloatingPanel }?.makeKey()
         } label: {
-            Image(systemName: runningTask == nil ? "pause.fill" : "play.fill")
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(runningTask == nil ? Color.black.opacity(0.75) : Color.white)
-                .frame(width: 40, height: 40)
-                .background(Circle().fill(LinearGradient(colors: runningTask.map(colors) ?? idleColors,
-                                                          startPoint: .topLeading, endPoint: .bottomTrailing)))
+            Group {
+                if runningTask != nil {
+                    FlickeringFire()
+                } else {
+                    Image(systemName: "pause.fill").font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(Color.black.opacity(0.75))
+                }
+            }
+            .frame(width: 40, height: 40)
+            .background(Circle().fill(LinearGradient(colors: runningTask == nil ? idleColors : fireBackground,
+                                                      startPoint: .top, endPoint: .bottom)))
         }
         .buttonStyle(Pressable())
         .help(runningTask?.title ?? "Nothing running")

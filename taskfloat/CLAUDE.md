@@ -13,7 +13,7 @@ A floating always-on-top task timer. The whole app is one file, `TaskFloat.swift
 ## How the panel behaves
 
 - It's an `NSPanel` with `.nonactivatingPanel`: it can be the key window while another app stays frontmost.
-- **Shrinks to an icon when unfocused.** When the panel stops being the key window, it becomes a 48pt round button: a play icon in the running task's colors, or a yellow pause icon when nothing runs. Clicking it makes the panel key, and the panel grows back with an animation. Launching the app usually makes the panel key, so it starts fully open.
+- **Shrinks to an icon when unfocused.** When the panel stops being the key window, it becomes a 48pt round button: a flickering fire while a task runs, or a yellow pause icon when nothing does. Clicking it makes the panel key, and the panel grows back with an animation. Launching the app usually makes the panel key, so it starts fully open.
 - While it's an icon, the window's frame autosave is turned off, so a restart reopens the full panel, not the icon.
 
 ## Gotchas
@@ -21,6 +21,7 @@ A floating always-on-top task timer. The whole app is one file, `TaskFloat.swift
 - Never resize the window during a SwiftUI layout pass. Do it on the next run-loop turn (`DispatchQueue.main.async`), or layout loops forever and the app freezes.
 - `hosting.safeAreaRegions = []` matters: without it, the hidden title bar's safe area added about 24pt of empty space to the icon window.
 - `@State` doesn't build with the Command Line Tools, so screen state lives in the `PanelState` class.
+- Animations that never stop belong in Core Animation layers (`FireView`), not SwiftUI. A `TimelineView` or `phaseAnimator` fire cost 5-7% CPU nonstop; the same fire as `CABasicAnimation`s costs 0%. Measure with `ps -o %cpu= -p $(pgrep -x TaskFloat)`.
 - A pointing-hand cursor over the icon was tried (a tracking-area `NSView` with `.activeAlways`) and never showed, so it was removed.
 
 ## Checking a change without touching the user's screen
