@@ -11,7 +11,6 @@ enum Octicon: String {
     case running = "dot-fill-16"
     case approved = "check-circle-16"
     case changesRequested = "file-diff-16"
-    case reviewRequested = "eye-16"
     case waitingOnReview = "code-review-16"
     case waitingOnAuthor = "hourglass-16"
 

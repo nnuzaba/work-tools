@@ -26,7 +26,6 @@ struct MenuPanel: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             PanelDivider()
-            section("Needs you", rows: needsYouRows)
             section("Your PRs", rows: yourPRRows)
             section("Reviewing", rows: reviewingRows)
             footer
@@ -97,13 +96,6 @@ struct MenuPanel: View {
         }
     }
 
-    private var needsYouRows: [PanelRowItem] {
-        store.snapshot.reviewRequests
-            .filter { store.snapshot.commentedPRKeys.contains($0.id) }
-            .map { PanelRowItem(id: $0.id, title: $0.title, detail: "\(shortName($0.id)) · review requested",
-                                octicon: .reviewRequested, tint: GitHubColor.accent, url: $0.url) }
-    }
-
     private var yourPRRows: [PanelRowItem] {
         store.snapshot.myPRs.sorted { urgencyRank($0) < urgencyRank($1) }.map { pr in
             let (octicon, tint, detail) = statusSummary(for: pr)
@@ -112,12 +104,10 @@ struct MenuPanel: View {
         }
     }
 
-    /// Open PRs you've weighed in on, minus the ones already listed under "Needs you".
-    /// Waiting on your review comes first, then waiting on the author, then approved.
-    /// Within each group, the newest activity stays on top.
+    /// Open PRs you've weighed in on. Waiting on your review comes first, then waiting
+    /// on the author, then approved. Within each group, the newest activity stays on top.
     private var reviewingRows: [PanelRowItem] {
-        let needsYouKeys = Set(needsYouRows.map(\.id))
-        return store.snapshot.reviewingPRs.filter { !needsYouKeys.contains($0.id) }
+        store.snapshot.reviewingPRs
             .enumerated()
             .sorted { (reviewingRank($0.element), $0.offset) < (reviewingRank($1.element), $1.offset) }
             .map { _, pr in

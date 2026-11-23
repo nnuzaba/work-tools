@@ -94,7 +94,6 @@ struct GitHubNotification: Identifiable, Decodable {
 /// Everything one poll learns from GitHub.
 struct Snapshot {
     var myPRs: [PullRequest] = []
-    var reviewRequests: [PullRequest] = []
     /// Open PRs by someone else that you commented on or reviewed, newest activity first.
     var reviewingPRs: [PullRequest] = []
     /// Reviewing PRs where you did the latest thing, so the ball is in the author's court.
@@ -132,9 +131,6 @@ enum GitHub {
     query {
       viewer { login }
       mine: search(query: "is:pr is:open author:@me archived:false sort:updated-desc", type: ISSUE, first: 20) {
-        nodes { ...prFields }
-      }
-      review: search(query: "is:pr is:open review-requested:@me archived:false sort:updated-desc", type: ISSUE, first: 20) {
         nodes { ...prFields }
       }
       commented: search(query: "is:pr -author:@me commenter:@me sort:updated-desc", type: ISSUE, first: 50) {
@@ -185,11 +181,11 @@ enum GitHub {
         return printed
     }
 
-    /// Fetches your PRs, PRs waiting on your review, and unread PR/CI notifications.
+    /// Fetches your PRs, PRs you commented on or reviewed, and unread PR/CI notifications.
     static func fetchSnapshot() throws -> Snapshot {
         struct SearchResponse: Decodable {
             let data: Results
-            struct Results: Decodable { let viewer: Viewer; let mine, review: Search; let commented, reviewed: KeySearch }
+            struct Results: Decodable { let viewer: Viewer; let mine: Search; let commented, reviewed: KeySearch }
             struct Viewer: Decodable { let login: String }
             struct Search: Decodable { let nodes: [PullRequest] }
             struct KeySearch: Decodable { let nodes: [CommentedNode] }
@@ -221,7 +217,7 @@ enum GitHub {
             .values.filter { $0.state == "OPEN" }
             .sorted { $0.updatedAt > $1.updatedAt }
         let waitingOnAuthorPRKeys = Set(reviewingPRs.filter { $0.lastHumanLogin == search.viewer.login }.map(\.id))
-        return Snapshot(myPRs: search.mine.nodes, reviewRequests: search.review.nodes, reviewingPRs: reviewingPRs,
+        return Snapshot(myPRs: search.mine.nodes, reviewingPRs: reviewingPRs,
                         waitingOnAuthorPRKeys: waitingOnAuthorPRKeys, notifications: notifications, commentedPRs: commentedPRs)
     }
 
