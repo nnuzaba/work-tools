@@ -340,9 +340,31 @@ final class HDRDiscView: NSView {
         // Layer y runs upward, so the brighter yellow starts at the top.
         disc.startPoint = CGPoint(x: 0.5, y: 1)
         disc.endPoint = CGPoint(x: 0.5, y: 0)
-        disc.colors = [Self.hdrColor(hex: 0xFFD43B, brightness: 4), Self.hdrColor(hex: 0xFF9F1C, brightness: 2.5)]
+        let brightColors = [Self.hdrColor(hex: 0xFFD43B, brightness: 4), Self.hdrColor(hex: 0xFF9F1C, brightness: 2.5)]
+        let dimColors = [Self.hdrColor(hex: 0xFFD43B, brightness: 1), Self.hdrColor(hex: 0xFF9F1C, brightness: 1)]
+        disc.colors = brightColors
         disc.preferredDynamicRange = .high
         layer?.addSublayer(disc)
+        addBreathingPulse(to: disc, dimColors: dimColors, brightColors: brightColors)
+    }
+
+    /// Makes the disc slowly shrink and dim, then grow and brighten, forever, so it catches the eye on any screen.
+    /// Core Animation runs it on its own, so it costs the app no CPU.
+    private func addBreathingPulse(to disc: CAGradientLayer, dimColors: [CGColor], brightColors: [CGColor]) {
+        let shrink = CABasicAnimation(keyPath: "transform.scale")
+        shrink.fromValue = 0.86
+        shrink.toValue = 1.0
+        let brighten = CABasicAnimation(keyPath: "colors")
+        brighten.fromValue = dimColors
+        brighten.toValue = brightColors
+        let breath = CAAnimationGroup()
+        breath.animations = [shrink, brighten]
+        breath.duration = 1.1
+        breath.autoreverses = true
+        breath.repeatCount = .infinity
+        breath.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        breath.isRemovedOnCompletion = false
+        disc.add(breath, forKey: "breath")
     }
 
     required init?(coder: NSCoder) { fatalError("HDRDiscView is only made in code") }
