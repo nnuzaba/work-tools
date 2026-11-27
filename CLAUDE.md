@@ -2,6 +2,10 @@
 
 Personal tools, one folder each. Each tool's own notes live in its folder's CLAUDE.md.
 
+## Trying a change: relaunch without asking
+
+Once a change to an app (PR Watch, TaskFloat) builds, relaunch it from the build you just made, using the steps in its folder's CLAUDE.md. Don't ask first. This replaces the "want a dev server started?" question before a commit. Still stop for "ok to commit".
+
 ## Landing work: merge to main, no PRs
 
 Once a branch is committed, fast-forward it into `main` in the main checkout. A worktree can't check out `main`, and the main checkout is the first line of `git worktree list`:
