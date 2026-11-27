@@ -183,6 +183,10 @@ final class PanelState: ObservableObject {
     @Published var renameDraft = ""
     /// True while the panel is shrunk to a small pill because it isn't the focused window.
     @Published var isCollapsedToPill = false
+    /// True while the mouse rests on the pill, which then shows the running task and its time beside the icon.
+    @Published var isHoveringPill = false
+    /// Puts that label left of the icon when the pill sits on the right half of the screen, so it grows inward.
+    @Published var hoverLabelOnLeft = false
     @Published var themeName = UserDefaults.standard.string(forKey: "theme") ?? themes[0].name {
         didSet { UserDefaults.standard.set(themeName, forKey: "theme") }
     }
@@ -407,37 +411,49 @@ struct ContentView: View {
     /// The round icon shown while the panel isn't focused: a flickering fire while a task runs,
     /// or a glowing HDR yellow pause icon when nothing does, so idle time stands out.
     /// While running, a badge shows how many task cards are open if it's more than one.
-    /// Hover shows the task's name. Clicking it focuses the panel, which opens it.
+    /// Resting the mouse on it shows the running task and its time (see `showTaskWhileHovered`).
+    /// Clicking it focuses the panel, which opens it.
     private var collapsedPill: some View {
         let runningTask = store.alphabetical.first { $0.startedAt != nil }
         let openCardCount = store.tasks.filter(\.showsAsCard).count
         let fireBackground = [Color(hex: 0x3A1F14), Color(hex: 0x1A0F0C)]
+        let icon = Group {
+            if runningTask != nil {
+                FlickeringFire()
+            } else {
+                Image(systemName: "pause.fill").font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(Color.black.opacity(0.75))
+            }
+        }
+        .frame(width: 40, height: 40)
+        .background {
+            if runningTask == nil {
+                HDRDisc()
+            } else {
+                Circle().fill(LinearGradient(colors: fireBackground, startPoint: .top, endPoint: .bottom))
+            }
+        }
         return Button {
             NSApp.windows.first { $0 is FloatingPanel }?.makeKey()
         } label: {
-            Group {
-                if runningTask != nil {
-                    FlickeringFire()
-                } else {
-                    Image(systemName: "pause.fill").font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(Color.black.opacity(0.75))
-                }
+            HStack(spacing: 8) {
+                if ui.isHoveringPill && ui.hoverLabelOnLeft { hoverLabel(runningTask) }
+                icon
+                if ui.isHoveringPill && !ui.hoverLabelOnLeft { hoverLabel(runningTask) }
             }
-            .frame(width: 40, height: 40)
             .background {
-                if runningTask == nil {
-                    HDRDisc()
-                } else {
-                    Circle().fill(LinearGradient(colors: fireBackground, startPoint: .top, endPoint: .bottom))
+                if ui.isHoveringPill {
+                    Capsule().fill(LinearGradient(colors: ui.theme.background, startPoint: .top, endPoint: .bottom))
                 }
             }
+            // Ideal size, not the window's: the window is resized to fit this, so it can't size this.
+            .fixedSize()
         }
         .buttonStyle(Pressable())
-        .help(runningTask?.title ?? "Nothing running")
         .padding(4)
         // Drawn over the padding so the badge stays inside the small window.
         .overlay(alignment: .topTrailing) {
-            if runningTask != nil && openCardCount > 1 {
+            if runningTask != nil && openCardCount > 1 && !ui.isHoveringPill {
                 Text("\(openCardCount)").font(.system(size: 10, weight: .heavy, design: .rounded)).foregroundStyle(.white)
                     .frame(minWidth: 16, minHeight: 16)
                     .background(Circle().fill(Color(hex: 0xE5383B)))
@@ -454,6 +470,26 @@ struct ContentView: View {
         // Measured before this, so the window isn't made taller by the hidden title bar's height.
         .ignoresSafeArea()
         .environment(\.colorScheme, ui.theme.isDark ? .dark : .light)
+    }
+
+    /// The running task's name and its time so far, shown beside the pill's icon while the mouse rests on it.
+    /// Long names are cut short so the pill stays small.
+    private func hoverLabel(_ runningTask: TaskItem?) -> some View {
+        let title = runningTask?.title ?? "Nothing running"
+        let shortTitle = title.count > 32 ? title.prefix(31) + "…" : title
+        let alignment: HorizontalAlignment = ui.hoverLabelOnLeft ? .trailing : .leading
+        return VStack(alignment: alignment, spacing: 1) {
+            Text(shortTitle).font(.callout.weight(.semibold)).lineLimit(1)
+            if let runningTask {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Text(clock(runningTask.elapsed(at: context.date)))
+                        .font(.caption.weight(.medium)).monospacedDigit().opacity(0.8)
+                }
+            }
+        }
+        .padding(ui.hoverLabelOnLeft ? .leading : .trailing, 14)
+        .foregroundStyle(.primary)
+        .fontDesign(.rounded)
     }
 
     @ViewBuilder private var fullPanel: some View {
@@ -746,6 +782,23 @@ final class DragHandleView: NSView {
     }
 }
 
+/// Reports when the mouse enters or leaves the window. It never takes clicks, so everything under it still works.
+final class HoverWatcherView: NSView {
+    var onHoverChange: (_ mouseEntered: Bool) -> Void = { _ in }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                       owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) { onHoverChange(true) }
+    override func mouseExited(with event: NSEvent) { onHoverChange(false) }
+}
+
 /// Puts a `DragHandleView` behind SwiftUI content.
 struct DragHandle: NSViewRepresentable {
     func makeNSView(context: Context) -> DragHandleView { DragHandleView() }
@@ -905,6 +958,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         addMenuBarItem()
         registerToggleHotKey()
         collapseToPillWhenUnfocused(panel, ui: ui)
+        showTaskWhileHovered(panel, hosting: hosting, ui: ui)
         let workspaceEvents = NSWorkspace.shared.notificationCenter
         for sleepEvent in [NSWorkspace.screensDidSleepNotification, NSWorkspace.willSleepNotification] {
             workspaceEvents.addObserver(self, selector: #selector(pauseAllForSleep), name: sleepEvent, object: nil)
@@ -921,10 +975,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         events.addObserver(forName: NSWindow.didBecomeKeyNotification, object: panel, queue: .main) { _ in
             MainActor.assumeIsolated {
                 panel.expand()
+                ui.isHoveringPill = false
                 ui.isCollapsedToPill = false
             }
         }
         ui.isCollapsedToPill = true
+    }
+
+    /// While the mouse rests on the pill, shows the running task and how long it's run, without opening the panel
+    /// or taking keyboard focus. Short waits stop a mouse that's just passing by from setting it off.
+    @MainActor private func showTaskWhileHovered(_ panel: FloatingPanel, hosting: NSView, ui: PanelState) {
+        let watcher = HoverWatcherView(frame: hosting.bounds)
+        watcher.autoresizingMask = [.width, .height]
+        hosting.addSubview(watcher)
+        watcher.onHoverChange = { mouseEntered in
+            DispatchQueue.main.asyncAfter(deadline: .now() + (mouseEntered ? 0.25 : 0.15)) {
+                MainActor.assumeIsolated {
+                    let mouseStillInside = panel.frame.contains(NSEvent.mouseLocation)
+                    if mouseEntered, mouseStillInside, ui.isCollapsedToPill {
+                        ui.hoverLabelOnLeft = panel.frame.midX > (panel.screen?.visibleFrame.midX ?? 0)
+                        ui.isHoveringPill = true
+                    } else if !mouseEntered, !mouseStillInside {
+                        ui.isHoveringPill = false
+                    }
+                }
+            }
+        }
     }
 
     /// Pauses every running task when the display or the whole Mac goes to sleep, so idle time isn't counted.

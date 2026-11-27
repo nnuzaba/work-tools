@@ -14,6 +14,7 @@ A floating always-on-top task timer. The whole app is one file, `TaskFloat.swift
 
 - It's an `NSPanel` with `.nonactivatingPanel`: it can be the key window while another app stays frontmost.
 - **Shrinks to an icon when unfocused.** When the panel stops being the key window, it becomes a 48pt round button: a flickering fire while a task runs, or a yellow pause icon when nothing does. Clicking it makes the panel key, and the panel grows back with an animation. Launching the app usually makes the panel key, so it starts fully open.
+- **Hovering the icon shows the running task.** After the mouse rests on the icon for 0.25s, a label beside it shows the running task's name and its time so far, without opening the panel or taking focus. The label goes on the side facing the middle of the screen. A `HoverWatcherView` subview with `hitTest` returning nil sees the mouse without taking clicks.
 - While it's an icon, the window's frame autosave is turned off, so a restart reopens the full panel, not the icon.
 
 ## Gotchas
